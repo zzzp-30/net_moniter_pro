@@ -8,31 +8,40 @@ import psutil
 from .models import TrafficRecord
 from django.utils import timezone
 from django.utils.timezone import localtime, now
-from datetime import timedelta
+from datetime import timedelta, datetime
 # 确保监控启动
 monitor.start()
 
 # --- 功能 1 实现: 历史记录接口 ---
 class HistoryReportView(APIView):
     def get(self, request):
-        # 获取过去 24 小时的数据
-        last_24h = now() - timedelta(hours=24)
-        records = TrafficRecord.objects.filter(timestamp__gte=last_24h).order_by('timestamp')
+        # 1. 获取前端传来的日期参数 (格式 YYYY-MM-DD)
+        date_str = request.query_params.get('date')
+        
+        if not date_str:
+            # 如果没传，默认查“今天”
+            target_date = localtime(now()).date()
+        else:
+            try:
+                # 解析字符串为日期对象
+                target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({"error": "日期格式错误"}, status=400)
+
+        # 2. 数据库查询：使用 __date 过滤器直接匹配那一天的数据
+        records = TrafficRecord.objects.filter(timestamp__date=target_date).order_by('timestamp')
         
         data = []
         for r in records:
-            # 将 UTC 时间转为配置的本地时区时间 ---
+            # 转为本地时间字符串 "10:30"
             local_dt = localtime(r.timestamp)
-            local_time_str = local_dt.strftime("%H:%M") 
-            
             data.append({
-                'time': local_time_str,
+                'time': local_dt.strftime("%H:%M"), 
                 'up': r.upload_speed,
                 'down': r.download_speed
             })
             
         return Response(data)
-        
 # --- 功能 2 实现: 用户注册接口 ---
 class RegisterView(APIView):
     def post(self, request):

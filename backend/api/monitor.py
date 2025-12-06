@@ -5,6 +5,9 @@ from collections import deque
 from scapy.all import sniff, IP, TCP, UDP
 # 引入 Django 模型 (需要放在函数内部或确保 App 已加载)
 from .models import TrafficRecord 
+from django.utils import timezone
+from datetime import timedelta
+
 
 traffic_data = deque(maxlen=60) # 内存中保留最近60秒用于实时展示
 packet_logs = deque(maxlen=100)
@@ -42,27 +45,32 @@ class NetworkMonitor:
             self.temp_down += recv
             self.history_counter += 1
 
-            # 3. 每60秒存一次数据库 (生成历史报告的数据源)
+            # 3. 每60秒存一次数据库
             if self.history_counter >= 60:
                 try:
-                    # 计算平均速度 (KB/s)
                     avg_up = (self.temp_up / 60) / 1024
                     avg_down = (self.temp_down / 60) / 1024
                     
-                    # 存入 SQLite
+                    # A. 保存新数据
                     TrafficRecord.objects.create(
                         upload_speed=round(avg_up, 2),
                         download_speed=round(avg_down, 2)
                     )
-                    # print(f"历史数据已保存: Up {avg_up} KB/s") 
+                    
+                    # B. [新增] 数据清洗：删除 30 天前的记录
+                    # 计算30天前的时刻
+                    retention_limit = timezone.now() - timedelta(days=30)
+                    # 执行删除指令
+                    TrafficRecord.objects.filter(timestamp__lt=retention_limit).delete()
+                    
                 except Exception as e:
-                    print(f"保存历史数据失败: {e}")
+                    print(f"数据存储/清理失败: {e}")
                 
                 # 重置计数器
                 self.history_counter = 0
                 self.temp_up = 0
                 self.temp_down = 0
-
+                
             # 4. 阈值报警检测
             total_speed_mb = (sent + recv) / 1024 / 1024
             if total_speed_mb > self.threshold_mb:

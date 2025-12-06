@@ -1,59 +1,59 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, computed, onMounted } from 'vue'
 import axios from 'axios'
 import * as echarts from 'echarts'
 
-// --- 状态变量 ---
+// --- 基础状态 ---
 const isLoggedIn = ref(false)
 const isRegisterMode = ref(false)
 const isHistoryMode = ref(false)
 const username = ref('')
 const password = ref('')
 
-const dashboardData = ref({ 
-  traffic: [], 
-  packets: [], 
-  alerts: [], 
-  devices: {}, 
-  settings: { threshold: 2.0, filter: 'ALL' } 
-})
-
-// 控制面板变量
+// --- 仪表盘数据 ---
+const dashboardData = ref({ traffic: [], packets: [], alerts: [], devices: {}, settings: { threshold: 2.0, filter: 'ALL' } })
 const selectedFilter = ref('ALL')
 const thresholdInput = ref(2.0)
+
+// --- 历史记录专属状态 ---
+// 默认选中今天
+const todayStr = new Date().toISOString().split('T')[0]
+const selectedDate = ref(todayStr) 
+const selectedSlot = ref('ALL') // 'ALL' 或 '00:00', '00:30' 等
+const historyRawData = ref([])  // 存储那一天所有的原始数据
+
+// 生成 48 个 30分钟的时间段 (00:00, 00:30, ... 23:30)
+const timeSlots = computed(() => {
+  const slots = []
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 30) {
+      const hour = h.toString().padStart(2, '0')
+      const minute = m.toString().padStart(2, '0')
+      slots.push(`${hour}:${minute}`)
+    }
+  }
+  return slots
+})
 
 let chartInstance = null
 let pollInterval = null
 
-// --- 认证逻辑 (登录/注册) ---
+// --- 鉴权逻辑 (不变) ---
 const handleAuth = async () => {
   if (!username.value || !password.value) return alert("请输入完整信息")
-  
-  const url = isRegisterMode.value 
-    ? 'http://127.0.0.1:8000/api/register/' 
-    : 'http://127.0.0.1:8000/api/login/'
-
+  const url = isRegisterMode.value ? 'http://127.0.0.1:8000/api/register/' : 'http://127.0.0.1:8000/api/login/'
   try {
-    const res = await axios.post(url, {
-      username: username.value,
-      password: password.value
-    })
-
+    const res = await axios.post(url, { username: username.value, password: password.value })
     if (res.data.token) {
       isLoggedIn.value = true
       nextTick(() => initDashboard())
     } else if (isRegisterMode.value) {
       alert("注册成功! 请登录")
-      isRegisterMode.value = false
-      password.value = ''
+      isRegisterMode.value = false; password.value = ''
     }
-  } catch (e) {
-    const msg = e.response?.data?.error || "连接失败"
-    alert(`操作失败: ${msg}`)
-  }
+  } catch (e) { alert("操作失败") }
 }
 
-// --- 应用配置 (阈值/过滤) ---
 const applySettings = async () => {
   try {
     await Promise.all([
@@ -64,7 +64,7 @@ const applySettings = async () => {
   } catch (e) { alert("配置更新失败") }
 }
 
-// --- 初始化与模式切换 ---
+// --- 核心逻辑 ---
 const initDashboard = () => {
   const chartDom = document.getElementById('main-chart')
   if (chartDom) {
@@ -77,47 +77,87 @@ const initDashboard = () => {
 const startRealtime = () => {
   isHistoryMode.value = false
   if(pollInterval) clearInterval(pollInterval)
-  pollInterval = setInterval(fetchData, 1000)
+  pollInterval = setInterval(fetchRealtimeData, 1000)
 }
 
+// 切换到历史模式 / 改变日期 / 改变时段
 const showHistory = async () => {
   isHistoryMode.value = true
   if(pollInterval) clearInterval(pollInterval)
   
+  // 如果是第一次切过来，或者改变了日期，需要重新请求后端
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/history/')
-    const data = res.data
-    // 渲染历史柱状图
-    const times = data.map(i => i.time)
-    const ups = data.map(i => i.up)
-    const downs = data.map(i => i.down)
-    
-    chartInstance.setOption({
-      title: { text: '24小时网络流量历史趋势 (均值/分钟)', textStyle: { color: '#fff' } },
-      xAxis: { data: times },
-      series: [
-        { name: '上传 Upload', data: ups, type: 'bar', itemStyle: { color: '#ff4d4f' } },
-        { name: '下载 Download', data: downs, type: 'bar', itemStyle: { color: '#409EFF' } }
-      ]
-    })
-  } catch(e) { alert("暂无历史数据，请等待系统运行至少1分钟") }
+    const res = await axios.get(`http://127.0.0.1:8000/api/history/?date=${selectedDate.value}`)
+    historyRawData.value = res.data // 存下全天数据
+    renderHistoryChart() // 渲染图表
+  } catch(e) { 
+    alert("获取历史数据失败") 
+  }
 }
 
-// --- 数据获取与渲染 ---
-const fetchData = async () => {
+// 根据当前选中的时段过滤数据并渲染
+const renderHistoryChart = () => {
+  let displayData = []
+
+  if (selectedSlot.value === 'ALL') {
+    // 显示全天
+    displayData = historyRawData.value
+  } else {
+    // 过滤出选定30分钟内的数据
+    // selectedSlot 格式如 "14:30"
+    const [startH, startM] = selectedSlot.value.split(':').map(Number)
+    
+    // 计算结束时间 (用于逻辑判断)
+    let endM = startM + 30
+    let endH = startH
+    if (endM >= 60) { endM = 0; endH += 1 }
+
+    // 格式化便于比较的字符串
+    const startStr = selectedSlot.value
+    const endStr = `${endH.toString().padStart(2,'0')}:${endM.toString().padStart(2,'0')}`
+
+    displayData = historyRawData.value.filter(item => {
+      // item.time 格式 "14:35"
+      // 简单字符串比较即可: startStr <= time < endStr
+      return item.time >= startStr && item.time < endStr
+    })
+  }
+
+  const times = displayData.map(i => i.time)
+  const ups = displayData.map(i => i.up)
+  const downs = displayData.map(i => i.down)
+
+  const titleText = selectedSlot.value === 'ALL' 
+    ? `${selectedDate.value} 全天流量趋势` 
+    : `${selectedDate.value} [${selectedSlot.value} - 30min] 详情`
+
+  chartInstance.setOption({
+    title: { text: titleText, textStyle: { color: '#fff' } },
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 60, bottom: 30 },
+    xAxis: { data: times },
+    yAxis: { type: 'value' },
+    series: [
+      { name: '上传', data: ups, type: 'bar', itemStyle: { color: '#ff4d4f' }, barMaxWidth: 30 },
+      { name: '下载', data: downs, type: 'bar', itemStyle: { color: '#409EFF' }, barMaxWidth: 30 }
+    ]
+  })
+}
+
+// --- 实时数据获取 ---
+const fetchRealtimeData = async () => {
   if(isHistoryMode.value) return
   try {
     const res = await axios.get('http://127.0.0.1:8000/api/dashboard/')
     dashboardData.value = res.data
     updateRealtimeChart(res.data.traffic)
     
-    // 智能滚动日志
     const logWin = document.getElementById('log-window')
     if(logWin) {
       const isScrolledToBottom = logWin.scrollHeight - logWin.clientHeight <= logWin.scrollTop + 50;
       if(isScrolledToBottom) logWin.scrollTop = logWin.scrollHeight
     }
-  } catch (e) { console.error("API Error", e) }
+  } catch (e) { console.error(e) }
 }
 
 const updateRealtimeChart = (data) => {
@@ -127,24 +167,15 @@ const updateRealtimeChart = (data) => {
   const recv = data.map(item => (item.recv / 1024).toFixed(1))
 
   chartInstance.setOption({
-    backgroundColor: 'transparent',
-    title: { text: '实时网络吞吐量 (KB/s)', left: '20', textStyle: { color: '#fff', fontSize: 16 } },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    title: { text: '实时网络吞吐量 (KB/s)', textStyle: { color: '#fff' } },
+    tooltip: { trigger: 'axis' },
     legend: { top: 0, right: 20, textStyle: { color: '#ccc' } },
-    grid: { top: 60, bottom: 30, left: 50, right: 30, containLabel: true },
-    xAxis: { type: 'category', data: times, boundaryGap: false, axisLine: { lineStyle: { color: '#555' } } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: '#333', type: 'dashed' } } },
+    grid: { top: 60, bottom: 30, left: 50, right: 30 },
+    xAxis: { type: 'category', data: times },
+    yAxis: { type: 'value' },
     series: [
-      { 
-        name: '上传 Upload', type: 'line', data: sent, smooth: true, showSymbol: false,
-        lineStyle: { width: 3, color: '#ff4d4f' },
-        areaStyle: { opacity: 0.2, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: '#ff4d4f'}, {offset: 1, color: 'rgba(255, 77, 79, 0)'}]) }
-      },
-      { 
-        name: '下载 Download', type: 'line', data: recv, smooth: true, showSymbol: false,
-        lineStyle: { width: 3, color: '#409EFF' },
-        areaStyle: { opacity: 0.2, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: '#409EFF'}, {offset: 1, color: 'rgba(64, 158, 255, 0)'}]) }
-      }
+      { name: '上传', type: 'line', data: sent, areaStyle: { opacity: 0.2 }, smooth: true, itemStyle: { color: '#ff4d4f' } },
+      { name: '下载', type: 'line', data: recv, areaStyle: { opacity: 0.2 }, smooth: true, itemStyle: { color: '#409EFF' } }
     ]
   })
 }
@@ -156,61 +187,52 @@ const updateRealtimeChart = (data) => {
       <div class="login-bg-animation"></div>
       <div class="login-card">
         <div class="brand">
-          <div class="logo-glow">⚡</div>
-          <h2>NET SENTRY</h2>
-          <p class="subtitle">网络态势感知系统</p>
+          <div class="logo-glow">⚡</div><h2>NET SENTRY</h2>
         </div>
         <div class="input-group">
           <input v-model="username" type="text" placeholder="Access ID" class="cyber-input" />
           <input v-model="password" type="password" placeholder="Passcode" class="cyber-input" @keyup.enter="handleAuth"/>
         </div>
-        
-        <button @click="handleAuth" class="cyber-btn">
-          <span class="btn-text">{{ isRegisterMode ? 'REGISTER SYSTEM' : 'INITIALIZE LINK' }}</span>
-        </button>
-
-        <div class="switch-mode" @click="isRegisterMode = !isRegisterMode">
-          {{ isRegisterMode ? '已有账号? 返回登录 [LOGIN]' : '没有账号? 立即注册 [REGISTER]' }}
-        </div>
+        <button @click="handleAuth" class="cyber-btn">{{ isRegisterMode ? 'REGISTER' : 'LOGIN' }}</button>
+        <div class="switch-mode" @click="isRegisterMode = !isRegisterMode">{{ isRegisterMode ? '返回登录' : '立即注册' }}</div>
       </div>
     </div>
   </transition>
 
   <div v-if="isLoggedIn" class="dashboard">
     <header class="top-bar">
-      <div class="logo-area">
-        <span class="icon">⚡</span>
-        <span class="text">NET MONITOR <small>PRO</small></span>
-      </div>
+      <div class="logo-area"><span class="icon">⚡</span> NET MONITOR</div>
       
       <div class="control-bar">
         <div class="mode-switch">
-          <button :class="['mode-btn', !isHistoryMode ? 'active' : '']" @click="startRealtime">实时监控</button>
-          <button :class="['mode-btn', isHistoryMode ? 'active' : '']" @click="showHistory">历史报告</button>
+          <button :class="['mode-btn', !isHistoryMode ? 'active' : '']" @click="startRealtime">实时</button>
+          <button :class="['mode-btn', isHistoryMode ? 'active' : '']" @click="showHistory">历史</button>
         </div>
 
-        <template v-if="!isHistoryMode">
+        <template v-if="isHistoryMode">
           <div class="control-group">
-            <select v-model="selectedFilter" class="cyber-select">
-              <option value="ALL">ALL PROTOCOLS</option>
-              <option value="TCP">TCP ONLY</option>
-              <option value="UDP">UDP ONLY</option>
+            <label>日期:</label>
+            <input type="date" v-model="selectedDate" class="cyber-input-date" @change="showHistory">
+          </div>
+          <div class="control-group">
+            <label>时段:</label>
+            <select v-model="selectedSlot" class="cyber-select" @change="renderHistoryChart">
+              <option value="ALL">全天 (24h)</option>
+              <option v-for="slot in timeSlots" :key="slot" :value="slot">{{ slot }} - {{ slot.split(':')[1]=='00'?'30':'00' }}</option>
             </select>
           </div>
-          
-          <div class="control-group">
-            <input v-model="thresholdInput" type="number" step="0.5" class="cyber-input-sm" placeholder="MB/s">
-          </div>
-          
-          <button @click="applySettings" class="action-btn">APPLY</button>
+        </template>
+
+        <template v-else>
+          <select v-model="selectedFilter" class="cyber-select">
+            <option value="ALL">ALL</option><option value="TCP">TCP</option><option value="UDP">UDP</option>
+          </select>
+          <input v-model="thresholdInput" type="number" class="cyber-input-sm" placeholder="MB">
+          <button @click="applySettings" class="action-btn">应用</button>
         </template>
       </div>
 
-      <div v-if="dashboardData.alerts.length" class="alert-ticker">
-        <span class="alert-icon">⚠️</span>
-        <span class="alert-msg">{{ dashboardData.alerts[dashboardData.alerts.length-1].msg }}</span>
-      </div>
-
+      <div v-if="dashboardData.alerts.length" class="alert-ticker">⚠️ {{ dashboardData.alerts[dashboardData.alerts.length-1].msg }}</div>
       <button @click="isLoggedIn = false" class="logout-btn">EXIT</button>
     </header>
 
@@ -220,45 +242,34 @@ const updateRealtimeChart = (data) => {
           <div id="main-chart" class="chart-container"></div>
         </div>
         
-        <div class="panel device-panel">
-          <div class="panel-header">
-            <h3>{{ isHistoryMode ? 'Report Summary' : 'Active Interfaces' }}</h3>
-            <span class="status-indicator online">ONLINE</span>
-          </div>
-          
-          <div v-if="!isHistoryMode" class="device-grid">
+        <div v-if="!isHistoryMode" class="panel device-panel">
+          <div class="panel-header"><h3>Active Interfaces</h3><span class="online">ONLINE</span></div>
+          <div class="device-grid">
             <div v-for="(ip, name) in dashboardData.devices" :key="name" class="device-card">
-              <div class="dev-icon">🖧</div>
-              <div class="dev-info">
-                <span class="dev-name">{{ name }}</span>
-                <span class="dev-ip">{{ ip }}</span>
-              </div>
+              <span class="dev-name">{{ name }}</span>: <span class="dev-ip">{{ ip }}</span>
             </div>
           </div>
-          <div v-else class="history-note">
-            <p>📊 已加载过去 24 小时的流量统计数据。</p>
-            <p>数据聚合粒度：1 分钟。</p>
+        </div>
+        
+        <div v-else class="panel device-panel">
+          <div class="panel-header"><h3>Analysis Mode</h3></div>
+          <div class="history-note">
+             <p>📅 当前查看日期: <b>{{ selectedDate }}</b></p>
+             <p>⏱️ 当前时间切片: <b>{{ selectedSlot === 'ALL' ? '24小时全景' : selectedSlot + ' (30分钟)' }}</b></p>
+             <p>📊 数据点总数: {{ historyRawData.length }} (分钟级聚合)</p>
           </div>
         </div>
       </div>
 
       <div class="col-logs">
         <div class="panel log-panel">
-          <div class="panel-header">
-            <h3>{{ isHistoryMode ? 'Logs (Cached)' : `Packet Sniffer [${selectedFilter}]` }}</h3>
-            <span class="count">{{ dashboardData.packets.length }} pkts</span>
-          </div>
-          
+          <div class="panel-header"><h3>{{ isHistoryMode ? 'Cached Logs' : `Sniffer [${selectedFilter}]` }}</h3></div>
           <div id="log-window" class="log-window">
             <div v-for="(log, index) in dashboardData.packets" :key="index" class="log-row">
               <span class="time">{{ log.time }}</span>
-              <div class="proto-cell">
-                <span :class="['proto', log.proto]">{{ log.proto }}</span>
-              </div>
+              <div class="proto-cell"><span :class="['proto', log.proto]">{{ log.proto }}</span></div>
               <div class="detail">
-                <span class="addr src" :title="log.src">{{ log.src }}</span>
-                <span class="arrow">→</span>
-                <span class="addr dst" :title="log.dst">{{ log.dst }}</span>
+                <span class="addr src" :title="log.src">{{ log.src }}</span><span class="arrow">→</span><span class="addr dst" :title="log.dst">{{ log.dst }}</span>
               </div>
               <span class="size">{{ log.len }}B</span>
             </div>
@@ -270,12 +281,7 @@ const updateRealtimeChart = (data) => {
 </template>
 
 <style>
-/* 全局重置 */
-body, html {
-  margin: 0; padding: 0; width: 100%; height: 100%;
-  overflow: hidden; background-color: #050b14;
-  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-}
+body, html { margin: 0; background: #050b14; color: #cbd5e1; font-family: 'Segoe UI', sans-serif; height: 100%; overflow: hidden; }
 </style>
 
 <style scoped>
