@@ -1,0 +1,23 @@
+--进入虚拟环境：
+source venv/bin/activate
+
+--在backend目录下
+sudo ../venv/bin/python3 manage.py runserver 0.0.0.0:8000 --noreload 后端
+
+
+
+cd ~/net_monitor_pro/frontend
+npm run dev   --前端
+
+---创建用户：
+
+cd ~/net_monitor_pro/backend
+sudo ../venv/bin/python3 manage.py createsuperuser
+
+--迁移数据：
+sudo ../venv/bin/python3 manage.py migrate
+
+--账号密码：
+123    123
+admin  zdmwszp110
+
