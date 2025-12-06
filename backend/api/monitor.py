@@ -3,18 +3,21 @@ import time
 import psutil
 from collections import deque
 from scapy.all import sniff, IP, TCP, UDP
+# 引入 Django 模型 (需要放在函数内部或确保 App 已加载)
+from .models import TrafficRecord 
 
-traffic_data = deque(maxlen=20)
-packet_logs = deque(maxlen=50)
+traffic_data = deque(maxlen=60) # 内存中保留最近60秒用于实时展示
+packet_logs = deque(maxlen=100)
 alerts = deque(maxlen=10)
 
 class NetworkMonitor:
     def __init__(self):
         self.running = False
-        # --- 功能 4: 动态阈值变量 (默认 2MB/s) ---
         self.threshold_mb = 2.0 
-        # --- 功能 3: 动态过滤器变量 (默认全部) ---
         self.packet_filter = 'ALL' 
+        self.history_counter = 0     # 计时器
+        self.temp_up = 0             # 累积上传量
+        self.temp_down = 0           # 累积下载量
 
     def start(self):
         if not self.running:
@@ -30,15 +33,42 @@ class NetworkMonitor:
             sent = curr_io.bytes_sent - last_io.bytes_sent
             recv = curr_io.bytes_recv - last_io.bytes_recv
             
+            # 1. 实时数据处理
             timestamp = time.strftime("%H:%M:%S")
             traffic_data.append({'time': timestamp, 'sent': sent, 'recv': recv})
             
-            # --- 功能 4 实现: 使用动态阈值进行判断 ---
+            # 2. 累积数据 (用于历史存库)
+            self.temp_up += sent
+            self.temp_down += recv
+            self.history_counter += 1
+
+            # 3. 每60秒存一次数据库 (生成历史报告的数据源)
+            if self.history_counter >= 60:
+                try:
+                    # 计算平均速度 (KB/s)
+                    avg_up = (self.temp_up / 60) / 1024
+                    avg_down = (self.temp_down / 60) / 1024
+                    
+                    # 存入 SQLite
+                    TrafficRecord.objects.create(
+                        upload_speed=round(avg_up, 2),
+                        download_speed=round(avg_down, 2)
+                    )
+                    # print(f"历史数据已保存: Up {avg_up} KB/s") 
+                except Exception as e:
+                    print(f"保存历史数据失败: {e}")
+                
+                # 重置计数器
+                self.history_counter = 0
+                self.temp_up = 0
+                self.temp_down = 0
+
+            # 4. 阈值报警检测
             total_speed_mb = (sent + recv) / 1024 / 1024
             if total_speed_mb > self.threshold_mb:
                 alerts.append({
                     'time': timestamp, 
-                    'msg': f"高负载警报: 当前 {total_speed_mb:.2f} MB/s (阈值: {self.threshold_mb} MB)"
+                    'msg': f"高负载警报: {total_speed_mb:.2f} MB/s (阈值: {self.threshold_mb})"
                 })
             
             last_io = curr_io

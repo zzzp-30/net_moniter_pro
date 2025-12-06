@@ -16,11 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from api.views import RegisterView,LoginView, DashboardDataView
+from api.views import RegisterView,LoginView, DashboardDataView, HistoryReportView 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/login/', LoginView.as_view()),
-    path('api/register/', RegisterView.as_view()),
-    path('api/dashboard/', DashboardDataView.as_view()),
+    path('api/login/', LoginView.as_view()),           #登录路由
+    path('api/register/', RegisterView.as_view()),     #注册路由
+    path('api/dashboard/', DashboardDataView.as_view()), # 仪表盘数据路由
+    path('api/history/', HistoryReportView.as_view()), # 历史记录路由
 ]
