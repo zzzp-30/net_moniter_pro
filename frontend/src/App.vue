@@ -211,8 +211,10 @@ const updateRealtimeChart = (data) => {
 
         <template v-if="isHistoryMode">
           <div class="control-group">
-            <label>日期:</label>
-            <input type="date" v-model="selectedDate" class="cyber-input-date" @change="showHistory">
+            <span class="label-text">DATE_SELECT:</span>
+            <div class="date-wrapper">
+              <input type="date" v-model="selectedDate" class="cyber-date-picker" @change="showHistory">
+            </div>
           </div>
           <div class="control-group">
             <label>时段:</label>
@@ -437,4 +439,55 @@ body, html { margin: 0; background: #050b14; color: #cbd5e1; font-family: 'Segoe
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.5s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* --- 日期选择器样式 --- */
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f172a;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+}
+
+.label-text {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.cyber-date-picker {
+  background: transparent;
+  border: none;
+  color: #3b82f6; /* 选中日期的颜色：科技蓝 */
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+  font-weight: bold;
+  outline: none;
+  cursor: pointer;
+  
+  /* 关键：强制浏览器原生的日历弹窗使用暗黑模式 */
+  color-scheme: dark; 
+}
+
+/* 鼠标悬停效果 */
+.cyber-date-picker:hover {
+  color: #60a5fa;
+}
+
+/* 定制右侧的“日历小图标” */
+.cyber-date-picker::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(1); /* 关键：把默认黑图标反转成白色 */
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.cyber-date-picker::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  filter: drop-shadow(0 0 2px #3b82f6); /* 图标发光 */
+}
 </style>
