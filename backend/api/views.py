@@ -9,7 +9,11 @@ from .models import TrafficRecord
 from django.utils import timezone
 from django.utils.timezone import localtime, now
 from datetime import timedelta, datetime
-# 确保监控启动
+import logging
+
+logger = logging.getLogger(__name__)
+
+# 确保监控启动（模块加载时启动后台监控线程）
 monitor.start()
 
 # --- 功能 1 实现: 历史记录接口 ---
@@ -98,7 +102,8 @@ class DashboardDataView(APIView):
             try:
                 monitor.threshold_mb = float(value)
                 return Response({"msg": f"阈值已更新为 {value} MB/s"})
-            except:
+            except (ValueError, TypeError):
+                logger.warning("设置阈值失败，无效数值: %r", value)
                 return Response({"error": "无效数值"}, status=400)
         
         elif action == 'set_filter':

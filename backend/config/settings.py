@@ -10,22 +10,38 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _env_bool(name, default):
+    """从环境变量读取布尔值：'1/true/yes/on' 视为 True，其余为 False"""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-4!_(9d6o&#1c2k%y&c4t=v5%9@1b4cgm7o==zow4y*f=@1+u&0'
+# SECURITY WARNING: 生产环境务必通过环境变量 DJANGO_SECRET_KEY 注入随机密钥，切勿硬编码提交！
+# 本地生成密钥：python -c "import secrets; print(secrets.token_urlsafe(50))"
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-dev-only-key-please-override-in-production'
+)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# SECURITY WARNING: 生产环境请设置环境变量 DJANGO_DEBUG=False
+DEBUG = _env_bool('DJANGO_DEBUG', True)
 
-ALLOWED_HOSTS = []
+# 通过环境变量 DJANGO_ALLOWED_HOSTS 配置（逗号分隔）；未设置时使用便于本地开发的默认值
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()
+] or ['localhost', '127.0.0.1']
 
 
 # Application definition

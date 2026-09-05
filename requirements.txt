@@ -1,0 +1,14 @@
+# Net Monitor Pro — 后端依赖
+# 安装：pip install -r requirements.txt
+# 版本对应项目实际验证环境（Python 3.10+）
+
+Django==5.2.8
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+
+# 网络监控
+psutil==7.1.3          # 实时流量统计（net_io_counters）
+scapy==2.6.1           # 数据包捕获与协议解析
+
+# 可选：带宽测速（当前代码未启用，预留）
+speedtest-cli==2.1.3
